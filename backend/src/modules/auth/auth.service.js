@@ -23,12 +23,20 @@ const authService = {
       env.JWT_SECRET,
       { expiresIn: env.JWT_EXPIRES_IN }
     );
+const logger = require('../../utils/logger');
+
+logger.info("User logged in", {
+  userId: user.id,
+  role: user.role
+});
 
     return {
       token,
       user: { id: user.id, role: user.role, email: user.email, fullName: user.full_name }
     };
   }
+  
 };
+
 
 module.exports = { authService };

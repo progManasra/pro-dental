@@ -1,3 +1,5 @@
+const logger = require('../../utils/logger');
+
 const { appointmentsService } = require('./appointments.service');
 
 async function myAppointments(req, res, next) {
@@ -16,12 +18,14 @@ async function myAppointments(req, res, next) {
 
 async function book(req, res, next) {
   try {
+    logger.debug({ body: req.body }, 'Booking payload'); // ✅ هنا مكانه الصحيح
     const out = await appointmentsService.book(req.user, req.body);
     res.status(201).json({ ok: true, appointment: out });
   } catch (e) {
     next(e);
   }
 }
+
 async function availableSlots(req, res, next) {
   try {
     const doctorId = Number(req.query.doctorId);
@@ -76,4 +80,5 @@ async function setNote(req, res, next) {
     res.json({ ok: true, appointment: out });
   } catch (e) { next(e); }
 }
+
 module.exports = { myAppointments, book, availableSlots, cancel, reschedule, doctorAction, setStatus, setNote };
