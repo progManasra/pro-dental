@@ -16,7 +16,8 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: acrprodentaldev.azurecr.io/prodental-frontend:1.0
+          image: acrprodentaldev.azurecr.io/prodental-frontend:1.1
+          imagePullPolicy: Always
           ports:
             - containerPort: 80
 ---
