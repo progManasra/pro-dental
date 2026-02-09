@@ -39,6 +39,20 @@ jobs:
         run: |
           az acr login --name "${ACR_LOGIN_SERVER%%.*}"
 
+      - name: Debug - list repo files
+        run: |
+          pwd
+          ls -la
+          echo "---- backend ----"
+          ls -la backend
+          echo "---- backend/src ----"
+          ls -la backend/src || true
+          echo "---- backend/.dockerignore ----"
+          cat backend/.dockerignore || true
+          echo "---- root .dockerignore ----"
+          cat .dockerignore || true
+
+
       - name: Build & Push Backend Image
         run: |
           # build context is backend/
