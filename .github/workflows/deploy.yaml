@@ -119,14 +119,42 @@ jobs:
         run: |
           kubectl -n "$NAMESPACE" get deploy -o wide || true
 
-      - name: Update images in AKS
+      # ✅ Auto-detect deployments and update images safely
+      - name: Update images in AKS (auto-detect deployments)
         shell: bash
         run: |
-          kubectl -n "$NAMESPACE" set image deploy/backend  backend=${ACR_LOGIN_SERVER}/prodental-backend:${BACKEND_TAG}
-          kubectl -n "$NAMESPACE" set image deploy/frontend frontend=${ACR_LOGIN_SERVER}/prodental-frontend:${FRONTEND_TAG}
+          set -euo pipefail
+
+          # Try common names first
+          BACKEND_DEPLOY="backend"
+          FRONTEND_DEPLOY="frontend"
+
+          if ! kubectl -n "$NAMESPACE" get deploy "$BACKEND_DEPLOY" >/dev/null 2>&1; then
+            BACKEND_DEPLOY="$(kubectl -n "$NAMESPACE" get deploy -o name | grep -i 'backend' | head -n 1 | sed 's|deployment.apps/||')"
+          fi
+
+          if ! kubectl -n "$NAMESPACE" get deploy "$FRONTEND_DEPLOY" >/dev/null 2>&1; then
+            FRONTEND_DEPLOY="$(kubectl -n "$NAMESPACE" get deploy -o name | grep -i 'frontend' | head -n 1 | sed 's|deployment.apps/||')"
+          fi
+
+          echo "Detected backend deployment: ${BACKEND_DEPLOY:-NOT_FOUND}"
+          echo "Detected frontend deployment: ${FRONTEND_DEPLOY:-NOT_FOUND}"
+
+          if [ -z "${BACKEND_DEPLOY:-}" ] || [ -z "${FRONTEND_DEPLOY:-}" ]; then
+            echo "ERROR: Could not detect backend/frontend deployments. Listing deployments:"
+            kubectl -n "$NAMESPACE" get deploy -o wide
+            exit 1
+          fi
+
+          # Save detected names for later steps (rollout)
+          echo "BACKEND_DEPLOY=$BACKEND_DEPLOY" >> $GITHUB_ENV
+          echo "FRONTEND_DEPLOY=$FRONTEND_DEPLOY" >> $GITHUB_ENV
+
+          kubectl -n "$NAMESPACE" set image "deploy/$BACKEND_DEPLOY"  backend="$ACR_LOGIN_SERVER/prodental-backend:$BACKEND_TAG"
+          kubectl -n "$NAMESPACE" set image "deploy/$FRONTEND_DEPLOY" frontend="$ACR_LOGIN_SERVER/prodental-frontend:$FRONTEND_TAG"
 
       - name: Wait for rollout
         shell: bash
         run: |
-          kubectl -n "$NAMESPACE" rollout status deploy/backend  --timeout=180s
-          kubectl -n "$NAMESPACE" rollout status deploy/frontend --timeout=180s
+          kubectl -n "$NAMESPACE" rollout status "deploy/$BACKEND_DEPLOY"  --timeout=180s
+          kubectl -n "$NAMESPACE" rollout status "deploy/$FRONTEND_DEPLOY" --timeout=180s
