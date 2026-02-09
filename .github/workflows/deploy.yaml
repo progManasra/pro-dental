@@ -1,23 +1,95 @@
-name: Deploy
+name: Build Push Deploy (AKS)
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+env:
+  NAMESPACE: prodental
+  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+  AKS_CLUSTER_NAME: ${{ secrets.AKS_CLUSTER_NAME }}
+  AKS_RESOURCE_GROUP: ${{ secrets.AKS_RESOURCE_GROUP }}
 
 jobs:
-  build:
+  build_push_deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
-    - name: Build Backend
-      run: |
-        cd ./backend
-        docker build -t backend-service .
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    - name: Docker Push
-      run: |
-        docker push backend-service
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --overwrite-existing
+
+      - name: ACR Login
+        run: |
+          az acr login --name "${ACR_LOGIN_SERVER%%.*}"
+
+      - name: Debug - list repo files
+        run: |
+          pwd
+          ls -la
+          echo "---- backend ----"
+          ls -la backend
+          echo "---- backend/src ----"
+          ls -la backend/src || true
+          echo "---- backend/.dockerignore ----"
+          cat backend/.dockerignore || true
+          echo "---- root .dockerignore ----"
+          cat .dockerignore || true
+
+      # ✅ Backend build context fix (use ./backend as context)
+      - name: Build & Push Backend Image
+        run: |
+          TAG=${GITHUB_SHA::7}
+          docker build -t $ACR_LOGIN_SERVER/prodental-backend:$TAG -f backend/Dockerfile ./backend  
+          docker push $ACR_LOGIN_SERVER/prodental-backend:$TAG
+          echo "BACKEND_TAG=$TAG" >> $GITHUB_ENV          
+
+      - name: Build & Push Frontend Image
+        run: |
+          TAG=${GITHUB_SHA::7}
+          docker build -t $ACR_LOGIN_SERVER/prodental-frontend:$TAG -f frontend/Dockerfile ./frontend
+          docker push $ACR_LOGIN_SERVER/prodental-frontend:$TAG
+          echo "FRONTEND_TAG=$TAG" >> $GITHUB_ENV
+
+      # ✅ Avoid ConfigMap binaryData/data duplicate apply issues
+      - name: Apply Kubernetes manifests (safe ConfigMap apply)
+        run: |
+          kubectl get ns $NAMESPACE || kubectl create ns $NAMESPACE
+
+          # Apply namespace + secrets + pvc + mysql + app first (excluding configmap if it causes conflict)
+          # Force-replace the SQL ConfigMap (prevents binaryData/data duplicate key apply failure)
+          kubectl -n $NAMESPACE delete configmap prodental-sql --ignore-not-found
+          kubectl -n $NAMESPACE apply -f k8s/02-sql-configmap.yaml
+
+          # Apply the rest (skip the configmap file so it doesn't get re-applied)
+          kubectl -n $NAMESPACE apply -f k8s/ --recursive \
+            --prune=false
+
+      - name: Update images in AKS
+        run: |
+          kubectl -n $NAMESPACE set image deploy/backend backend=$ACR_LOGIN_SERVER/prodental-backend:$BACKEND_TAG
+          kubectl -n $NAMESPACE set image deploy/frontend frontend=$ACR_LOGIN_SERVER/prodental-frontend:$FRONTEND_TAG
+
+      - name: Wait for rollout
+        run: |
+          kubectl -n $NAMESPACE rollout status deploy/backend
+          kubectl -n $NAMESPACE rollout status deploy/frontend
