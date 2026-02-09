@@ -42,7 +42,7 @@ jobs:
       - name: Build & Push Backend Image
         run: |
           TAG=${GITHUB_SHA::7}
-          docker build -t $ACR_LOGIN_SERVER/prodental-backend:$TAG -f backend/Dockerfile .
+          docker build -t $ACR_LOGIN_SERVER/prodental-backend:$TAG -f backend/Dockerfile backend
           docker push $ACR_LOGIN_SERVER/prodental-backend:$TAG
           echo "BACKEND_TAG=$TAG" >> $GITHUB_ENV
 
