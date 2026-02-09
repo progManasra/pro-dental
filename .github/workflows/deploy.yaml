@@ -7,6 +7,9 @@ on:
 
 env:
   NAMESPACE: prodental
+  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+  AKS_CLUSTER_NAME: ${{ secrets.AKS_CLUSTER_NAME }}
+  AKS_RESOURCE_GROUP: ${{ secrets.AKS_RESOURCE_GROUP }}
 
 jobs:
   build_push_deploy:
@@ -21,35 +24,46 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Get AKS credentials
+        run: |
+          az aks get-credentials \
+            --resource-group "$AKS_RESOURCE_GROUP" \
+            --name "$AKS_CLUSTER_NAME" \
+            --overwrite-existing
+
       - name: ACR Login
         run: |
-          echo "${{ secrets.ACR_PASSWORD }}" | docker login ${{ secrets.ACR_LOGIN_SERVER }} -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+          # يأخذ اسم الـ ACR بدون الدومين (acrprodentaldev)
+          az acr login --name "${ACR_LOGIN_SERVER%%.*}"
 
-      - name: Build Backend Image
+      - name: Build & Push Backend Image
         run: |
-          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/prodental-backend:${{ github.sha }} -f backend/Dockerfile .
+          TAG=${GITHUB_SHA}
+          docker build -t $ACR_LOGIN_SERVER/prodental-backend:$TAG -f backend/Dockerfile .
+          docker push $ACR_LOGIN_SERVER/prodental-backend:$TAG
+          echo "BACKEND_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Push Backend Image
+      - name: Build & Push Frontend Image
         run: |
-          docker push ${{ secrets.ACR_LOGIN_SERVER }}/prodental-backend:${{ github.sha }}
+          TAG=${GITHUB_SHA}
+          docker build -t $ACR_LOGIN_SERVER/prodental-frontend:$TAG -f frontend/Dockerfile frontend
+          docker push $ACR_LOGIN_SERVER/prodental-frontend:$TAG
+          echo "FRONTEND_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Build Frontend Image
+      - name: Apply Kubernetes manifests (k8s/)
         run: |
-          docker build -t ${{ secrets.ACR_LOGIN_SERVER }}/prodental-frontend:${{ github.sha }} -f frontend/Dockerfile frontend
+          kubectl get ns $NAMESPACE || kubectl create ns $NAMESPACE
+          kubectl -n $NAMESPACE apply -f k8s/
 
-      - name: Push Frontend Image
+      - name: Update images in AKS
         run: |
-          docker push ${{ secrets.ACR_LOGIN_SERVER }}/prodental-frontend:${{ github.sha }}
+          kubectl -n $NAMESPACE set image deploy/backend backend=$ACR_LOGIN_SERVER/prodental-backend:$BACKEND_TAG
+          kubectl -n $NAMESPACE set image deploy/frontend frontend=$ACR_LOGIN_SERVER/prodental-frontend:$FRONTEND_TAG
 
-      - name: Set Kubeconfig
+      - name: Wait for rollout
         run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
-          chmod 600 ~/.kube/config
-
-      - name: Deploy to AKS
-        run: |
-          kubectl -n $NAMESPACE set image deploy/backend backend=${{ secrets.ACR_LOGIN_SERVER }}/prodental-backend:${{ github.sha }}
-          kubectl -n $NAMESPACE set image deploy/frontend frontend=${{ secrets.ACR_LOGIN_SERVER }}/prodental-frontend:${{ github.sha }}
           kubectl -n $NAMESPACE rollout status deploy/backend
           kubectl -n $NAMESPACE rollout status deploy/frontend
