@@ -2,7 +2,8 @@ name: Build Push Deploy (AKS)
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
   workflow_dispatch:
 
 env:
@@ -36,32 +37,23 @@ jobs:
 
       - name: ACR Login
         run: |
-          # يأخذ اسم الـ ACR بدون الدومين (acrprodentaldev)
           az acr login --name "${ACR_LOGIN_SERVER%%.*}"
 
       - name: Build & Push Backend Image
         run: |
-<<<<<<< HEAD
-          TAG=${GITHUB_SHA}
-=======
           TAG=${GITHUB_SHA::7}
->>>>>>> ad9cd14e7cfe8f3d0c6a36c49c4d28acf6ed76d7
           docker build -t $ACR_LOGIN_SERVER/prodental-backend:$TAG -f backend/Dockerfile .
           docker push $ACR_LOGIN_SERVER/prodental-backend:$TAG
           echo "BACKEND_TAG=$TAG" >> $GITHUB_ENV
 
       - name: Build & Push Frontend Image
         run: |
-<<<<<<< HEAD
-          TAG=${GITHUB_SHA}
-=======
           TAG=${GITHUB_SHA::7}
->>>>>>> ad9cd14e7cfe8f3d0c6a36c49c4d28acf6ed76d7
           docker build -t $ACR_LOGIN_SERVER/prodental-frontend:$TAG -f frontend/Dockerfile frontend
           docker push $ACR_LOGIN_SERVER/prodental-frontend:$TAG
           echo "FRONTEND_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Apply Kubernetes manifests (k8s/)
+      - name: Apply Kubernetes manifests
         run: |
           kubectl get ns $NAMESPACE || kubectl create ns $NAMESPACE
           kubectl -n $NAMESPACE apply -f k8s/
