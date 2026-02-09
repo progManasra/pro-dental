@@ -23,6 +23,15 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      # ✅ Create one short tag for the whole workflow (consistent across steps)
+      - name: Set image tags
+        shell: bash
+        run: |
+          TAG="${GITHUB_SHA::7}"
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "BACKEND_TAG=$TAG" >> $GITHUB_ENV
+          echo "FRONTEND_TAG=$TAG" >> $GITHUB_ENV
+
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -32,6 +41,7 @@ jobs:
         uses: azure/setup-kubectl@v4
 
       - name: Get AKS credentials
+        shell: bash
         run: |
           az aks get-credentials \
             --resource-group "$AKS_RESOURCE_GROUP" \
@@ -39,57 +49,84 @@ jobs:
             --overwrite-existing
 
       - name: ACR Login
+        shell: bash
         run: |
           az acr login --name "${ACR_LOGIN_SERVER%%.*}"
 
+      # ✅ Optional but recommended: Buildx for better caching & reliability
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Debug - list repo files
+        shell: bash
         run: |
           pwd
           ls -la
           echo "---- backend ----"
-          ls -la backend
+          ls -la backend || true
           echo "---- backend/src ----"
           ls -la backend/src || true
           echo "---- backend/.dockerignore ----"
           cat backend/.dockerignore || true
           echo "---- root .dockerignore ----"
           cat .dockerignore || true
+          echo "---- frontend ----"
+          ls -la frontend || true
+          echo "---- frontend/.dockerignore ----"
+          cat frontend/.dockerignore || true
 
       # ✅ Backend build context fix (use ./backend as context)
       - name: Build & Push Backend Image
-        run: |
-          TAG=${GITHUB_SHA::7}
-          docker build -t $ACR_LOGIN_SERVER/prodental-backend:$TAG -f backend/Dockerfile ./backend  
-          docker push $ACR_LOGIN_SERVER/prodental-backend:$TAG
-          echo "BACKEND_TAG=$TAG" >> $GITHUB_ENV          
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ env.ACR_LOGIN_SERVER }}/prodental-backend:${{ env.BACKEND_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build & Push Frontend Image
-        run: |
-          TAG=${GITHUB_SHA::7}
-          docker build -t $ACR_LOGIN_SERVER/prodental-frontend:$TAG -f frontend/Dockerfile ./frontend
-          docker push $ACR_LOGIN_SERVER/prodental-frontend:$TAG
-          echo "FRONTEND_TAG=$TAG" >> $GITHUB_ENV
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: ${{ env.ACR_LOGIN_SERVER }}/prodental-frontend:${{ env.FRONTEND_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # ✅ Avoid ConfigMap binaryData/data duplicate apply issues
       - name: Apply Kubernetes manifests (safe ConfigMap apply)
+        shell: bash
         run: |
-          kubectl get ns $NAMESPACE || kubectl create ns $NAMESPACE
+          # Namespace
+          kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
 
-          # Apply namespace + secrets + pvc + mysql + app first (excluding configmap if it causes conflict)
-          # Force-replace the SQL ConfigMap (prevents binaryData/data duplicate key apply failure)
-          kubectl -n $NAMESPACE delete configmap prodental-sql --ignore-not-found
-          kubectl -n $NAMESPACE apply -f k8s/02-sql-configmap.yaml
+          # 1) Force-replace SQL ConfigMap (prevents binaryData/data duplicate key apply failure)
+          kubectl -n "$NAMESPACE" delete configmap prodental-sql --ignore-not-found
+          kubectl -n "$NAMESPACE" apply -f k8s/02-sql-configmap.yaml
 
-          # Apply the rest (skip the configmap file so it doesn't get re-applied)
-          kubectl -n $NAMESPACE apply -f k8s/ --recursive \
-            --prune=false
+          # 2) Apply the rest safely WITHOUT re-applying the same configmap again
+          #    (Assumption: k8s/ folder contains multiple YAMLs including 02-sql-configmap.yaml)
+          find k8s -type f \( -name "*.yml" -o -name "*.yaml" \) \
+            ! -path "k8s/02-sql-configmap.yaml" \
+            -print0 | xargs -0 -I {} kubectl -n "$NAMESPACE" apply -f {}
+
+      # ✅ Extra diagnostics: show deployments if set-image fails later
+      - name: Debug - list deployments in namespace
+        shell: bash
+        run: |
+          kubectl -n "$NAMESPACE" get deploy -o wide || true
 
       - name: Update images in AKS
+        shell: bash
         run: |
-          kubectl -n $NAMESPACE set image deploy/backend backend=$ACR_LOGIN_SERVER/prodental-backend:$BACKEND_TAG
-          kubectl -n $NAMESPACE set image deploy/frontend frontend=$ACR_LOGIN_SERVER/prodental-frontend:$FRONTEND_TAG
+          kubectl -n "$NAMESPACE" set image deploy/backend  backend=${ACR_LOGIN_SERVER}/prodental-backend:${BACKEND_TAG}
+          kubectl -n "$NAMESPACE" set image deploy/frontend frontend=${ACR_LOGIN_SERVER}/prodental-frontend:${FRONTEND_TAG}
 
       - name: Wait for rollout
+        shell: bash
         run: |
-          kubectl -n $NAMESPACE rollout status deploy/backend
-          kubectl -n $NAMESPACE rollout status deploy/frontend
+          kubectl -n "$NAMESPACE" rollout status deploy/backend  --timeout=180s
+          kubectl -n "$NAMESPACE" rollout status deploy/frontend --timeout=180s
