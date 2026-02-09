@@ -82,6 +82,9 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile
           push: true
+          platforms: linux/amd64
+          pull: true
+          no-cache: true
           tags: ${{ env.ACR_LOGIN_SERVER }}/prodental-backend:${{ env.BACKEND_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
