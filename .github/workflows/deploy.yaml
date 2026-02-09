@@ -2,8 +2,7 @@ name: Build Push Deploy (AKS)
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -15,7 +14,6 @@ env:
 jobs:
   build_push_deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +21,6 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # ✅ Create one short tag for the whole workflow (consistent across steps)
       - name: Set image tags
         shell: bash
         run: |
@@ -53,7 +50,6 @@ jobs:
         run: |
           az acr login --name "${ACR_LOGIN_SERVER%%.*}"
 
-      # ✅ Optional but recommended: Buildx for better caching & reliability
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -75,7 +71,6 @@ jobs:
           echo "---- frontend/.dockerignore ----"
           cat frontend/.dockerignore || true
 
-      # ✅ Backend build context fix (use ./backend as context)
       - name: Build & Push Backend Image
         uses: docker/build-push-action@v6
         with:
@@ -95,40 +90,31 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: true
+          platforms: linux/amd64
           tags: ${{ env.ACR_LOGIN_SERVER }}/prodental-frontend:${{ env.FRONTEND_TAG }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ✅ Avoid ConfigMap binaryData/data duplicate apply issues
       - name: Apply Kubernetes manifests (safe ConfigMap apply)
         shell: bash
         run: |
-          # Namespace
           kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
-
-          # 1) Force-replace SQL ConfigMap (prevents binaryData/data duplicate key apply failure)
           kubectl -n "$NAMESPACE" delete configmap prodental-sql --ignore-not-found
           kubectl -n "$NAMESPACE" apply -f k8s/02-sql-configmap.yaml
-
-          # 2) Apply the rest safely WITHOUT re-applying the same configmap again
-          #    (Assumption: k8s/ folder contains multiple YAMLs including 02-sql-configmap.yaml)
           find k8s -type f \( -name "*.yml" -o -name "*.yaml" \) \
             ! -path "k8s/02-sql-configmap.yaml" \
             -print0 | xargs -0 -I {} kubectl -n "$NAMESPACE" apply -f {}
 
-      # ✅ Extra diagnostics: show deployments if set-image fails later
       - name: Debug - list deployments in namespace
         shell: bash
         run: |
           kubectl -n "$NAMESPACE" get deploy -o wide || true
 
-      # ✅ Auto-detect deployments and update images safely
       - name: Update images in AKS (auto-detect deployments)
         shell: bash
         run: |
           set -euo pipefail
 
-          # Try common names first
           BACKEND_DEPLOY="backend"
           FRONTEND_DEPLOY="frontend"
 
@@ -144,12 +130,11 @@ jobs:
           echo "Detected frontend deployment: ${FRONTEND_DEPLOY:-NOT_FOUND}"
 
           if [ -z "${BACKEND_DEPLOY:-}" ] || [ -z "${FRONTEND_DEPLOY:-}" ]; then
-            echo "ERROR: Could not detect backend/frontend deployments. Listing deployments:"
+            echo "ERROR: Could not detect backend/frontend deployments."
             kubectl -n "$NAMESPACE" get deploy -o wide
             exit 1
           fi
 
-          # Save detected names for later steps (rollout)
           echo "BACKEND_DEPLOY=$BACKEND_DEPLOY" >> $GITHUB_ENV
           echo "FRONTEND_DEPLOY=$FRONTEND_DEPLOY" >> $GITHUB_ENV
 
