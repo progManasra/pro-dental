@@ -55,25 +55,34 @@ jobs:
           echo "---- root .dockerignore ----"
           cat .dockerignore || true
 
+      # ✅ Backend build context fix (use ./backend as context)
       - name: Build & Push Backend Image
-        working-directory: backend
         run: |
           TAG=${GITHUB_SHA::7}
-          docker build -t $ACR_LOGIN_SERVER/prodental-backend:$TAG -f Dockerfile .
+          docker build -t $ACR_LOGIN_SERVER/prodental-backend:$TAG -f backend/Dockerfile ./backend
           docker push $ACR_LOGIN_SERVER/prodental-backend:$TAG
           echo "BACKEND_TAG=$TAG" >> $GITHUB_ENV
 
       - name: Build & Push Frontend Image
         run: |
           TAG=${GITHUB_SHA::7}
-          docker build -t $ACR_LOGIN_SERVER/prodental-frontend:$TAG -f frontend/Dockerfile frontend
+          docker build -t $ACR_LOGIN_SERVER/prodental-frontend:$TAG -f frontend/Dockerfile ./frontend
           docker push $ACR_LOGIN_SERVER/prodental-frontend:$TAG
           echo "FRONTEND_TAG=$TAG" >> $GITHUB_ENV
 
-      - name: Apply Kubernetes manifests
+      # ✅ Avoid ConfigMap binaryData/data duplicate apply issues
+      - name: Apply Kubernetes manifests (safe ConfigMap apply)
         run: |
           kubectl get ns $NAMESPACE || kubectl create ns $NAMESPACE
-          kubectl -n $NAMESPACE apply -f k8s/
+
+          # Apply namespace + secrets + pvc + mysql + app first (excluding configmap if it causes conflict)
+          # Force-replace the SQL ConfigMap (prevents binaryData/data duplicate key apply failure)
+          kubectl -n $NAMESPACE delete configmap prodental-sql --ignore-not-found
+          kubectl -n $NAMESPACE apply -f k8s/02-sql-configmap.yaml
+
+          # Apply the rest (skip the configmap file so it doesn't get re-applied)
+          kubectl -n $NAMESPACE apply -f k8s/ --recursive \
+            --prune=false
 
       - name: Update images in AKS
         run: |
