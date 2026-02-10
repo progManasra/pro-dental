@@ -1,0 +1,6 @@
+{
+  "spec": {
+    "type": "LoadBalancer",
+    "loadBalancerIP": "68.210.105.121"
+  }
+}

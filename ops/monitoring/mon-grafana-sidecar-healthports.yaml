@@ -1,0 +1,10 @@
+grafana:
+  sidecar:
+    dashboards:
+      extraEnv:
+        - name: HEALTH_PORT
+          value: "8081"
+    datasources:
+      extraEnv:
+        - name: HEALTH_PORT
+          value: "8082"
