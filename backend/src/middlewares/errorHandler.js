@@ -2,11 +2,27 @@ const { logger } = require('../logger');
 
 function errorHandler() {
   return (err, req, res, next) => {
-    logger.error({ err, path: req.path }, 'Unhandled error');
-    const status = err.status || 500;
+    const status = err.statusCode || err.status || 500;
+
+    logger.error(
+      {
+        event: 'http_error',
+        requestId: req.requestId,
+        method: req.method,
+        path: req.originalUrl,
+        status,
+        error: {
+          message: err.message,
+          stack: err.stack,
+        },
+      },
+      'http_error'
+    );
+
     res.status(status).json({
       ok: false,
-      error: err.message || 'Internal Server Error'
+      requestId: req.requestId,
+      message: err.message || 'Internal Server Error',
     });
   };
 }

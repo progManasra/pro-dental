@@ -1,0 +1,59 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: backend-alerts
+  namespace: monitoring
+  labels:
+    release: mon
+spec:
+  groups:
+    - name: backend.rules
+      rules:
+        - alert: BackendDown
+          expr: up{namespace="prodental"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            service: backend
+          annotations:
+            summary: "Backend is down"
+            description: "Prometheus cannot scrape backend target in namespace=prodental for 1 minute."
+
+        - alert: BackendHighErrorRate
+          expr: |
+            (
+              sum(rate(http_request_duration_seconds_count{namespace="prodental", status_code=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(http_request_duration_seconds_count{namespace="prodental"}[5m])), 1)
+            ) > 0.05
+          for: 2m
+          labels:
+            severity: warning
+            service: backend
+          annotations:
+            summary: "High 5xx error rate"
+            description: "Backend 5xx ratio > 5% over last 5 minutes."
+
+        - alert: BackendHighLatencyP95
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(http_request_duration_seconds_bucket{namespace="prodental"}[5m])) by (le)
+            ) > 1
+          for: 2m
+          labels:
+            severity: warning
+            service: backend
+          annotations:
+            summary: "High latency (P95)"
+            description: "Backend P95 latency > 1s for 2 minutes."
+
+        - alert: BackendRestarts
+          expr: increase(kube_pod_container_status_restarts_total{namespace="prodental", pod=~"backend-.*"}[10m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+            service: backend
+          annotations:
+            summary: "Backend restarting"
+            description: "Backend container restarted in last 10 minutes."
